@@ -1,12 +1,13 @@
 use rand::Rng;
+use std::io;
 
-use crate::game::GameState;
+use crate::game::{Cell, GameState, Player};
 
-// Network parameters
-pub const NN_INPUT_SIZE: usize = 18;
-pub const NN_HIDDEN_SIZE: usize = 100;
-pub const NN_OUTPUT_SIZE: usize = 9;
-pub const NN_LEARNING_RATE: f64 = 0.1;
+// Neural network parameters
+pub const NN_INPUT_SIZE: usize = 18; // 9 cells * 2 (X and O) -> there are 18 input features 
+pub const NN_HIDDEN_SIZE: usize = 100; // 100 hidden neurons
+pub const NN_OUTPUT_SIZE: usize = 9; // 9 possible moves
+pub const NN_LEARNING_RATE: f64 = 0.1; // Learning rate for backpropagation
 
 pub struct NeuralNetwork {
     pub weights_ih: [f64; NN_INPUT_SIZE * NN_HIDDEN_SIZE],
@@ -21,13 +22,16 @@ pub struct NeuralNetwork {
 }
 
 impl NeuralNetwork {
+    /// Initializes a new neural network with random weights and biases
+    /// using a uniform distribution in the range [-0.5, 0.5]
+    /// from_fn -> is a Rust function that generates an array by applying a closure to each index
     pub fn new() -> Self {
         let mut rng = rand::rng();
-        let weights_ih = [0.0; NN_INPUT_SIZE * NN_HIDDEN_SIZE].map(|_| rng.random_range(-0.5..0.5));
-        let weights_ho =
-            [0.0; NN_HIDDEN_SIZE * NN_OUTPUT_SIZE].map(|_| rng.random_range(-0.5..0.5));
-        let biases_h = [0.0; NN_HIDDEN_SIZE].map(|_| rng.random_range(-0.5..0.5));
-        let biases_o = [0.0; NN_OUTPUT_SIZE].map(|_| rng.random_range(-0.5..0.5));
+
+        let weights_ih = std::array::from_fn(|_| rng.random_range(-0.5..0.5));
+        let weights_ho = std::array::from_fn(|_| rng.random_range(-0.5..0.5));
+        let biases_h = std::array::from_fn(|_| rng.random_range(-0.5..0.5));
+        let biases_o = std::array::from_fn(|_| rng.random_range(-0.5..0.5));
 
         NeuralNetwork {
             weights_ih,
@@ -41,53 +45,69 @@ impl NeuralNetwork {
         }
     }
 
+    ///
     pub fn forward_pass(&mut self, inputs: &[f64]) {
-        assert_eq!(inputs.len(), NN_HIDDEN_SIZE);
-
-        // copy inputs to the internal state
+        assert_eq!(inputs.len(), NN_INPUT_SIZE);
         self.inputs.copy_from_slice(inputs);
 
-        // input to hidden layer
+        // Input -> Hidden
+        // hᵢ = ReLU(Σⱼ (xⱼ * wⱼᵢ) + bᵢ)
         for i in 0..NN_HIDDEN_SIZE {
             let mut sum = self.biases_h[i];
 
+            // hidden layer neurons are connected to all input features
+            // hidden layers give us a non-linear transformation of the inputs
             for j in 0..NN_INPUT_SIZE {
+                // weights_ih is a 2D matrix flattened to 1D
+                // weights_ih[j * NN_HIDDEN_SIZE + i] gives us the weight from input j to hidden i
+                // inputs[j] is the j-th input feature
                 sum += self.inputs[j] * self.weights_ih[j * NN_HIDDEN_SIZE + i];
             }
 
             self.hidden[i] = relu(sum);
         }
 
-        // hidden to output layer
+        // Hidden -> Output
+        // oᵢ = softmax(Σⱼ (hⱼ * wⱼᵢ) + bᵢ)
         for i in 0..NN_OUTPUT_SIZE {
-            self.raw_logits[i] = self.biases_o[i];
+            let mut sum = self.biases_o[i];
 
+            // output layer neurons are connected to all hidden features
+            // output layer gives us the final probabilities for each move
+            // weights_ho is a 2D matrix flattened to 1D
+            // weights_ho[j * NN_OUTPUT_SIZE + i] gives us the weight from hidden j to output i
+            // self.hidden[j] is the j-th hidden feature
             for j in 0..NN_HIDDEN_SIZE {
-                self.raw_logits[i] += self.hidden[j] * self.weights_ho[j * NN_OUTPUT_SIZE + i];
+                sum += self.hidden[j] * self.weights_ho[j * NN_OUTPUT_SIZE + i];
             }
+
+            self.raw_logits[i] = sum;
         }
 
+        // Apply softmax to raw logits to get output probabilities
+        // softmax function converts raw logits into probabilities
         softmax(&self.raw_logits, &mut self.outputs, NN_OUTPUT_SIZE);
     }
 
-    pub fn backdrop(&mut self, target_probs: &[f64], learning_rate: f64, reward_scailing: f64) {
+    pub fn backprop(&mut self, target_probs: &[f64], learning_rate: f64, reward_scaling: f64) {
         let mut output_deltas = [0.0; NN_OUTPUT_SIZE];
         let mut hidden_deltas = [0.0; NN_HIDDEN_SIZE];
 
+        // Calculate output layer deltas
         for i in 0..NN_OUTPUT_SIZE {
-            output_deltas[i] = (self.outputs[i] - target_probs[i]) * reward_scailing.abs();
+            output_deltas[i] = (self.outputs[i] - target_probs[i]) * reward_scaling.abs();
         }
 
+        // Calculate hidden layer deltas
         for i in 0..NN_HIDDEN_SIZE {
             let mut error = 0.0;
-
             for j in 0..NN_OUTPUT_SIZE {
                 error += output_deltas[j] * self.weights_ho[i * NN_OUTPUT_SIZE + j];
             }
-
             hidden_deltas[i] = error * relu_derivative(self.hidden[i]);
         }
 
+        // Update hidden -> output weights
         for i in 0..NN_HIDDEN_SIZE {
             for j in 0..NN_OUTPUT_SIZE {
                 self.weights_ho[i * NN_OUTPUT_SIZE + j] -=
@@ -95,10 +115,12 @@ impl NeuralNetwork {
             }
         }
 
+        // Update output biases
         for i in 0..NN_OUTPUT_SIZE {
             self.biases_o[i] -= learning_rate * output_deltas[i];
         }
 
+        // Update input -> hidden weights
         for i in 0..NN_INPUT_SIZE {
             for j in 0..NN_HIDDEN_SIZE {
                 self.weights_ih[i * NN_HIDDEN_SIZE + j] -=
@@ -106,151 +128,220 @@ impl NeuralNetwork {
             }
         }
 
+        // Update hidden biases
         for i in 0..NN_HIDDEN_SIZE {
             self.biases_h[i] -= learning_rate * hidden_deltas[i];
         }
     }
 
-    pub fn learn_from_game(
-        &mut self,
-        move_history: &[f64],
-        num_moves: u32,
-        nn_moves_even: bool,
-        winner: char,
-    ) {
-        let mut reward = 0.0;
+    pub fn learn_from_game(&mut self, move_history: &[usize], nn_plays_as_o: bool, winner: Cell) {
+        let reward = match winner {
+            Cell::Empty => 0.3,               // Tie
+            Cell::O if nn_plays_as_o => 1.0,  // NN wins as O
+            Cell::X if !nn_plays_as_o => 1.0, // NN wins as X
+            _ => -2.0,                        // NN loses
+        };
 
-        let nn_symbol = if nn_moves_even { 'O' } else { 'X' };
-
-        if winner == 'T' {
-            reward = 0.3;
-        } else if winner == nn_symbol {
-            reward = 1.0;
-        } else {
-            reward = -2.0;
-        }
-
-        let mut state: GameState;
+        let num_moves = move_history.len();
 
         for move_idx in 0..num_moves {
-            if (nn_moves_even && move_idx % 2 != 1) || (!nn_moves_even && move_idx % 2 != 0) {
-                continue; // Skip moves not made by the neural network
+            // Determine if this move was made by the NN
+            // Game starts with Human (X), so:
+            // - Even indices (0, 2, 4, 6, 8): Human plays X
+            // - Odd indices (1, 3, 5, 7): AI plays O
+            let is_nn_move = if nn_plays_as_o {
+                move_idx % 2 == 1 // NN plays on odd moves (as O)
+            } else {
+                move_idx % 2 == 0 // NN plays on even moves (as X)
+            };
+
+            if !is_nn_move {
+                continue;
             }
 
-            state = GameState::new();
-            let mut target_probs = [0.0; NN_OUTPUT_SIZE];
+            // Reconstruct game state up to this move
+            let mut state = GameState::new();
 
-            for i in 0..move_idx as usize {
-                let symbol = if i % 2 == 0 { 'X' } else { 'O' };
-                state.board[move_history[i] as usize] = symbol;
+            for i in 0..move_idx {
+                let _ = state.make_move(move_history[i]); // Ignore errors in reconstruction
             }
 
+            // Get NN input for this state
             let mut inputs = [0.0; NN_INPUT_SIZE];
-            state.board_to_inputd(inputs.as_mut_slice());
+            state.board_to_input(&mut inputs);
             self.forward_pass(&inputs);
 
-            let m = move_history[move_idx as usize] as usize;
+            // Create target probabilities
+            let mut target_probs = [0.0; NN_OUTPUT_SIZE];
+            let chosen_move = move_history[move_idx];
 
-            let move_importance = 0.5 * 0.5 * move_idx as f64 / num_moves as f64;
+            let move_importance = 0.25 + 0.75 * (move_idx as f64 / num_moves as f64);
             let scaled_reward = reward * move_importance;
 
-            for i in 0..NN_OUTPUT_SIZE {
-                target_probs[i] = 0.0;
-            }
-
             if scaled_reward > 0.0 {
-                target_probs[m] = 1.0; // Target probability for the move made by the NN
+                // Good move - reinforce it
+                target_probs[chosen_move] = 1.0;
             } else {
-                let valid_moves_left = 9 - move_idx as usize - 1;
-                let other_prob = 1.0 / valid_moves_left as f64;
+                // Bad move - reinforce other valid moves
+                let valid_moves = state.get_valid_moves();
+                let valid_alternatives: Vec<usize> = valid_moves
+                    .into_iter()
+                    .filter(|&m| m != chosen_move)
+                    .collect();
 
-                for i in 0..9 {
-                    if state.board[i] == '.' && i != m {
-                        target_probs[i] = other_prob; // Uniform distribution for other moves
+                if !valid_alternatives.is_empty() {
+                    let prob_per_move = 1.0 / valid_alternatives.len() as f64;
+                    for &mv in &valid_alternatives {
+                        target_probs[mv] = prob_per_move;
                     }
                 }
             }
 
-            self.backdrop(&target_probs, NN_LEARNING_RATE, scaled_reward);
+            self.backprop(&target_probs, NN_LEARNING_RATE, scaled_reward);
         }
     }
 
-    pub fn play_game(&mut self) {
+    pub fn play_game(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = GameState::new();
-        let mut move_history = [0.0; 9];
-        let mut num_moves = 0;
+        let mut move_history: Vec<usize> = Vec::with_capacity(9);
 
-        while !state.check_game_over().is_none() {
+        println!("Welcome to Tic-Tac-Toe! You are X, computer is O.");
+
+        loop {
             state.display_board();
 
-            if state.current_player == 0 {
-                println!("Player X's turn. Enter your move (0-8):");
-                let mut input = String::new();
-                std::io::stdin()
-                    .read_line(&mut input)
-                    .expect("Failed to read line");
+            // Check if game is over
+            if let Some(winner) = state.check_game_over() {
+                println!(
+                    "{}",
+                    match winner {
+                        Cell::X => "You win!",
+                        Cell::O => "Computer wins!",
+                        Cell::Empty => "It's a tie!",
+                    }
+                );
 
-                let move_idx: usize = input.trim().parse().expect("Please enter a number");
-
-                if move_idx >= 9 || state.board[move_idx] != '.' {
-                    println!("Invalid move. Try again.");
-                    continue;
-                }
-
-                state.board[move_idx] = 'X';
-                num_moves += 1;
-                move_history[num_moves as usize] = move_idx as f64;
-            } else {
-                println!("Computer's move:");
-                let m = state.get_computer_move(self, true);
-                state.board[m as usize] = 'O';
-                println!("Computer placed 'O' at position {}", m);
-                num_moves += 1;
-                move_history[num_moves as usize] = m as f64;
+                self.learn_from_game(&move_history, true, winner);
+                break;
             }
 
-            state.current_player = 1 - state.current_player; // Switch players
+            match state.current_player {
+                Player::Human => {
+                    println!("Your move (0-8): ");
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
 
-            let winner = state.check_game_over();
+                    let mv: usize = match input.trim().parse() {
+                        Ok(n) if state.is_valid_move(n) => n,
+                        _ => {
+                            println!("Invalid move. Try again.");
+                            continue;
+                        }
+                    };
 
-            if let Some(winner_char) = winner {
-                if winner_char == 'X' {
-                    println!("Player X wins!");
-                } else if winner_char == 'O' {
-                    println!("Computer wins!");
-                } else {
-                    println!("It's a tie!");
+                    state.make_move(mv)?;
+                    move_history.push(mv);
                 }
-            }
-
-            if let Some(winner_char) = winner {
-                self.learn_from_game(&move_history, num_moves, true, winner_char);
+                Player::AI => {
+                    if let Some(mv) = state.get_computer_move(self, true) {
+                        println!("Computer chose position {}", mv);
+                        state.make_move(mv)?;
+                        move_history.push(mv);
+                    } else {
+                        println!("No valid moves available!");
+                        break;
+                    }
+                }
             }
         }
 
-        state.display_board();
+        Ok(())
+    }
+
+    pub fn play_random_game(&mut self) -> Cell {
+        let mut state = GameState::new();
+        let mut move_history = Vec::with_capacity(9);
+
+        loop {
+            if let Some(winner) = state.check_game_over() {
+                self.learn_from_game(&move_history, true, winner);
+                return winner;
+            }
+
+            let mv = match state.current_player {
+                Player::Human => {
+                    // Random player
+                    state.get_random_move()
+                }
+                Player::AI => {
+                    // Neural network
+                    state.get_computer_move(self, false)
+                }
+            };
+
+            if let Some(mv) = mv {
+                let _ = state.make_move(mv); // Ignore errors in training
+                move_history.push(mv);
+            } else {
+                break; // No valid moves
+            }
+        }
+
+        Cell::Empty // Shouldn't reach here, but return tie as fallback
+    }
+
+    pub fn train_against_random(&mut self, num_games: u32) {
+        let mut wins = 0;
+        let mut losses = 0;
+        let mut ties = 0;
+
+        for i in 0..num_games {
+            let winner = self.play_random_game();
+            match winner {
+                Cell::O => wins += 1,   // Assuming NN is O
+                Cell::X => losses += 1, // Random player is X
+                Cell::Empty => ties += 1,
+            }
+
+            if (i + 1) % 1000 == 0 {
+                let win_rate = wins as f64 / 1000.0 * 100.0;
+                println!(
+                    "Games: {}, Wins: {} ({:.1}%), Losses: {}, Ties: {}",
+                    i + 1,
+                    wins,
+                    win_rate,
+                    losses,
+                    ties
+                );
+                wins = 0;
+                losses = 0;
+                ties = 0;
+            }
+        }
+
+        println!("Training complete! {} games played.", num_games);
     }
 }
 
+impl Default for NeuralNetwork {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Activation functions
 pub fn relu(x: f64) -> f64 {
-    if x < 0.0 { 0.0 } else { x }
+    x.max(0.0)
 }
 
 pub fn relu_derivative(x: f64) -> f64 {
-    if x < 0.0 { 0.0 } else { 1.0 }
+    if x > 0.0 { 1.0 } else { 0.0 }
 }
 
 pub fn softmax(inputs: &[f64], outputs: &mut [f64], size: usize) {
-    let mut max_val = inputs[0];
-
-    for i in 1..size {
-        if inputs[i] > max_val {
-            max_val = inputs[i];
-        }
-    }
+    let max_val = inputs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
     let mut sum = 0.0;
-
     for i in 0..size {
         outputs[i] = (inputs[i] - max_val).exp();
         sum += outputs[i];
@@ -261,8 +352,9 @@ pub fn softmax(inputs: &[f64], outputs: &mut [f64], size: usize) {
             outputs[i] /= sum;
         }
     } else {
+        // Fallback to uniform distribution
         for i in 0..size {
-            outputs[i] = 1.0 / size as f64; // Uniform distribution if sum is zero
+            outputs[i] = 1.0 / size as f64;
         }
     }
 }

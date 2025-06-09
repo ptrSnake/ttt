@@ -1,54 +1,107 @@
 use crate::nn::*;
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Player {
+    Human = 0,
+    AI = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cell {
+    Empty,
+    X,
+    O,
+}
+
+impl fmt::Display for Cell {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Cell::Empty => write!(f, "."),
+            Cell::X => write!(f, "X"),
+            Cell::O => write!(f, "O"),
+        }
+    }
+}
 
 pub struct GameState {
-    pub board: [char; 9],   // 0 for empty, 1 for player 1, 2 for player 2
-    pub current_player: u8, // 1 or 2
+    pub board: [Cell; 9],
+    pub current_player: Player,
 }
 
 impl GameState {
+    /// Creates a new game state
     pub fn new() -> Self {
         GameState {
-            board: ['.'; 9],
-            current_player: 0,
+            board: [Cell::Empty; 9],
+            current_player: Player::Human,
         }
     }
 
+    /// Displays the game board
     pub fn display_board(&self) {
         for i in 0..3 {
             println!(
-                "{} | {} | {}",
+                " {} | {} | {} ",
                 self.board[i * 3],
                 self.board[i * 3 + 1],
                 self.board[i * 3 + 2]
             );
-
             if i < 2 {
-                println!("---------");
+                println!("-----------");
             }
         }
     }
 
-    pub fn board_to_inputd(&self, inputs: &mut [f64]) {
+    /// Makes a move at the specified position
+    pub fn make_move(&mut self, position: usize) -> Result<(), &'static str> {
+        if position >= 9 {
+            return Err("Invalid position: must be 0-8");
+        }
+
+        if self.board[position] != Cell::Empty {
+            return Err("Position already occupied");
+        }
+
+        self.board[position] = match self.current_player {
+            Player::Human => Cell::X,
+            Player::AI => Cell::O,
+        };
+
+        // Switch player
+        self.current_player = match self.current_player {
+            Player::Human => Player::AI,
+            Player::AI => Player::Human,
+        };
+
+        Ok(())
+    }
+
+    /// Converts the board to neural network input
+    pub fn board_to_input(&self, inputs: &mut [f64]) {
         for i in 0..9 {
-            if self.board[i] == '.' {
-                inputs[i * 2] = 0.0;
-                inputs[i * 2 + 1] = 0.0;
-            } else if self.board[i] == 'X' {
-                inputs[i * 2] = 1.0;
-                inputs[i * 2 + 1] = 0.0;
-            } else {
-                inputs[i * 2] = 0.0;
-                inputs[i * 2 + 1] = 1.0;
+            match self.board[i] {
+                Cell::Empty => {
+                    inputs[i * 2] = 0.0;
+                    inputs[i * 2 + 1] = 0.0;
+                }
+                Cell::X => {
+                    inputs[i * 2] = 1.0;
+                    inputs[i * 2 + 1] = 0.0;
+                }
+                Cell::O => {
+                    inputs[i * 2] = 0.0;
+                    inputs[i * 2 + 1] = 1.0;
+                }
             }
         }
     }
 
-    pub fn check_game_over(&self) -> Option<char> {
-        // Check rows, columns, and diagonals for a win
-
+    /// Checks if the game is over and returns the winner
+    pub fn check_game_over(&self) -> Option<Cell> {
         // Check rows
         for i in 0..3 {
-            if self.board[i * 3] != '.'
+            if self.board[i * 3] != Cell::Empty
                 && self.board[i * 3] == self.board[i * 3 + 1]
                 && self.board[i * 3 + 1] == self.board[i * 3 + 2]
             {
@@ -58,7 +111,7 @@ impl GameState {
 
         // Check columns
         for i in 0..3 {
-            if self.board[i] != '.'
+            if self.board[i] != Cell::Empty
                 && self.board[i] == self.board[i + 3]
                 && self.board[i + 3] == self.board[i + 6]
             {
@@ -67,83 +120,127 @@ impl GameState {
         }
 
         // Check diagonals
-        if self.board[0] != '.' && self.board[0] == self.board[4] && self.board[4] == self.board[8]
+        if self.board[0] != Cell::Empty
+            && self.board[0] == self.board[4]
+            && self.board[4] == self.board[8]
         {
             return Some(self.board[0]);
         }
 
-        // Check for tie
-        let mut empty_tiles = 0;
-
-        for i in 0..9 {
-            if self.board[i] == '.' {
-                empty_tiles += 1;
-            }
+        if self.board[2] != Cell::Empty
+            && self.board[2] == self.board[4]
+            && self.board[4] == self.board[6]
+        {
+            return Some(self.board[2]);
         }
 
-        if empty_tiles == 0 {
-            return Some('T'); // Tie
+        // Check for draw
+        if !self.board.contains(&Cell::Empty) {
+            return Some(Cell::Empty); // Use Empty to represent draw
         }
 
-        None // Game is still ongoing
+        None // Game continues
     }
 
-    pub fn get_computer_move(&mut self, nn: &mut NeuralNetwork, display_probs: bool) -> i32 {
-        let mut inputs = [0.0; NN_INPUT_SIZE];
+    /// Gets valid moves
+    pub fn get_valid_moves(&self) -> Vec<usize> {
+        self.board
+            .iter()
+            .enumerate()
+            .filter(|&(_, &cell)| cell == Cell::Empty)
+            .map(|(i, _)| i)
+            .collect()
+    }
 
-        self.board_to_inputd(&mut inputs);
+    /// Gets the computer's move using neural network
+    pub fn get_computer_move(
+        &mut self,
+        nn: &mut NeuralNetwork,
+        display_probs: bool,
+    ) -> Option<usize> {
+        let mut inputs = [0.0; NN_INPUT_SIZE];
+        self.board_to_input(&mut inputs);
         nn.forward_pass(&inputs);
 
-        let mut highest_prob = -1.0;
-        let mut hightest_prob_idx: i32 = -1;
-        let mut best_move: i32 = -1;
-        let mut best_legal_prob = -1.0;
+        let valid_moves = self.get_valid_moves();
+        if valid_moves.is_empty() {
+            return None;
+        }
 
-        for i in 0..9 {
-            let i32_idx = i as i32;
+        let mut best_move = valid_moves[0];
+        let mut best_prob = nn.outputs[best_move];
 
-            if nn.outputs[i] > highest_prob {
-                highest_prob = nn.outputs[i];
-                hightest_prob_idx = i32_idx;
-            }
-
-            if self.board[i] == '.' && (best_move == -1 || nn.outputs[i] > best_legal_prob) {
-                best_move = i32_idx;
-                best_legal_prob = nn.outputs[i];
+        // Find the best valid move
+        for &mv in &valid_moves {
+            if nn.outputs[mv] > best_prob {
+                best_prob = nn.outputs[mv];
+                best_move = mv;
             }
         }
 
         if display_probs {
-            println!("Neural Network move probabilities:");
+            self.display_move_probabilities(nn, best_move);
+        }
 
-            for row in 0..3 {
-                for col in 0..3 {
-                    let pos = row * 3 + col;
+        Some(best_move)
+    }
 
-                    println!("{:.2}", nn.outputs[pos] * 100.0);
+    /// Displays move probabilities in a grid format
+    fn display_move_probabilities(&self, nn: &NeuralNetwork, best_move: usize) {
+        println!("Move probabilities (NN):");
 
-                    if pos == hightest_prob_idx as usize {
-                        print!("*");
-                    }
+        for row in 0..3 {
+            for col in 0..3 {
+                let pos = row * 3 + col;
+                let prob = nn.outputs[pos] * 100.0;
 
-                    if pos == best_move as usize {
-                        print!("#");
-                    }
+                print!("{:>5.1}", prob);
 
+                if pos == best_move {
+                    print!("*");
+                } else {
                     print!(" ");
                 }
 
-                println!();
+                if col < 2 {
+                    print!(" |");
+                }
             }
-
-            let mut total_prob = 0.0;
-
-            for i in 0..9 {
-                total_prob += nn.outputs[i];
-                println!("Sum of all probabilities: {:.2}", total_prob);
+            println!();
+            if row < 2 {
+                println!("      |      |      ");
             }
         }
 
-        best_move
+        let total_prob: f64 = nn.outputs.iter().sum();
+        println!("Total probability: {:.2}", total_prob);
+    }
+
+    /// Gets a random valid move
+    pub fn get_random_move(&self) -> Option<usize> {
+        let valid_moves = self.get_valid_moves();
+        if valid_moves.is_empty() {
+            return None;
+        }
+
+        let idx = (rand::random::<u32>() as usize) % valid_moves.len();
+        Some(valid_moves[idx])
+    }
+
+    /// Resets the game state
+    pub fn reset(&mut self) {
+        self.board = [Cell::Empty; 9];
+        self.current_player = Player::Human;
+    }
+
+    /// Checks if a position is valid and empty
+    pub fn is_valid_move(&self, position: usize) -> bool {
+        position < 9 && self.board[position] == Cell::Empty
+    }
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
     }
 }
