@@ -5,3 +5,10 @@ edition = "2024"
 
 [dependencies]
 rand = "0.9.1"
+
+[profile.release]
+opt-level = 3      # Livello di ottimizzazione. 0 = nessuna, 3 = massima, "s" = ottimizza per dimensione, "z" = ottimizza per dimensione ancora di più.
+debug = false      # Rimuove i simboli di debug. È l'impostazione predefinita per release.
+lto = true         # Ottimizzazione link-time (LTO) - può migliorare le prestazioni ma aumenta i tempi di compilazione.
+codegen-units = 1  # Riduci i "codegen units" per abilitare più ottimizzazioni inter-modulo (aumenta i tempi di compilazione).
+panic = 'abort'    # Aborta il programma in caso di panic, invece di srotolare lo stack (può ridurre la dimensione del binario e migliorare leggermente le prestazioni).

@@ -45,7 +45,10 @@ impl NeuralNetwork {
         }
     }
 
-    ///
+    /// Performs a forward pass through the neural network.
+    /// This function computes the outputs of the neural network given the inputs.
+    /// It calculates the hidden layer activations using ReLU,
+    /// then computes the output layer logits, and finally applies softmax to get the output probabilities.
     pub fn forward_pass(&mut self, inputs: &[f64]) {
         assert_eq!(inputs.len(), NN_INPUT_SIZE);
         self.inputs.copy_from_slice(inputs);
@@ -89,6 +92,9 @@ impl NeuralNetwork {
         softmax(&self.raw_logits, &mut self.outputs, NN_OUTPUT_SIZE);
     }
 
+    /// Backpropagation algorithm to update weights and biases based on the target probabilities
+    /// This function calculates the deltas for the output and hidden layers,
+    /// then updates the weights and biases accordingly.
     pub fn backprop(&mut self, target_probs: &[f64], learning_rate: f64, reward_scaling: f64) {
         let mut output_deltas = [0.0; NN_OUTPUT_SIZE];
         let mut hidden_deltas = [0.0; NN_HIDDEN_SIZE];
@@ -134,14 +140,22 @@ impl NeuralNetwork {
         }
     }
 
+    /// Learns from a completed game by updating the neural network weights
+    /// based on the move history and the game outcome.
+    /// This function processes the move history,
+    /// determines if the move was made by the neural network,
+    /// reconstructs the game state up to that move,
+    /// and updates the neural network weights based on the outcome.
     pub fn learn_from_game(&mut self, move_history: &[usize], nn_plays_as_o: bool, winner: Cell) {
+        assert!(!move_history.is_empty(), "Move history cannot be empty");
+
+        // Determine the reward based on the game outcome
         let reward = match winner {
             Cell::Empty => 0.3,               // Tie
             Cell::O if nn_plays_as_o => 1.0,  // NN wins as O
             Cell::X if !nn_plays_as_o => 1.0, // NN wins as X
             _ => -2.0,                        // NN loses
         };
-
         let num_moves = move_history.len();
 
         for move_idx in 0..num_moves {
@@ -201,6 +215,9 @@ impl NeuralNetwork {
         }
     }
 
+    /// Plays a game of Tic-Tac-Toe against the computer.
+    /// This function allows a human player to play against the AI,
+    /// tracking the moves made during the game.
     pub fn play_game(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = GameState::new();
         let mut move_history: Vec<usize> = Vec::with_capacity(9);
@@ -258,6 +275,9 @@ impl NeuralNetwork {
         Ok(())
     }
 
+    /// Plays a random game where the AI plays against a random player.
+    /// This function simulates a game where the AI plays against a random player,
+    /// learning from the game outcome.
     pub fn play_random_game(&mut self) -> Cell {
         let mut state = GameState::new();
         let mut move_history = Vec::with_capacity(9);
@@ -290,10 +310,20 @@ impl NeuralNetwork {
         Cell::Empty // Shouldn't reach here, but return tie as fallback
     }
 
+    /// Trains the neural network by playing a specified number of games against a random player.
+    /// This function simulates multiple games where the neural network plays against a random player,
+    /// learning from each game outcome. It tracks wins, losses, and ties,
     pub fn train_against_random(&mut self, num_games: u32) {
         let mut wins = 0;
         let mut losses = 0;
         let mut ties = 0;
+
+        let mut total_games = 0;
+        let mut total_wins = 0;
+        let mut total_losses = 0;
+        let mut total_ties = 0;
+
+        println!("Training against random player...");
 
         for i in 0..num_games {
             let winner = self.play_random_game();
@@ -305,6 +335,12 @@ impl NeuralNetwork {
 
             if (i + 1) % 1000 == 0 {
                 let win_rate = wins as f64 / 1000.0 * 100.0;
+
+                total_games += 1000;
+                total_wins += wins;
+                total_losses += losses;
+                total_ties += ties;
+
                 println!(
                     "Games: {}, Wins: {} ({:.1}%), Losses: {}, Ties: {}",
                     i + 1,
@@ -320,6 +356,14 @@ impl NeuralNetwork {
         }
 
         println!("Training complete! {} games played.", num_games);
+        println!(
+            "Total Games: {}, Wins: {}, Losses: {}, Ties: {}",
+            total_games, total_wins, total_losses, total_ties
+        );
+        println!(
+            "Final Win Rate: {:.1}%",
+            total_wins as f64 / total_games as f64 * 100.0
+        );
     }
 }
 
